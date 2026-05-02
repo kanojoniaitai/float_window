@@ -42,6 +42,13 @@ export function CategoryPanel({
   }, [notes, searchQuery]);
 
   useEffect(() => {
+    setCatName(category.name);
+    setIsRenaming(false);
+    setShowMenu(false);
+    setShowDeleteConfirm(false);
+  }, [category.id, category.name]);
+
+  useEffect(() => {
     if (isRenaming && renameInputRef.current) {
       renameInputRef.current.focus();
       renameInputRef.current.select();

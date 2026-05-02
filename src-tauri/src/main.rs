@@ -7,6 +7,7 @@ use tauri::{Manager, PhysicalPosition, PhysicalSize, CustomMenuItem, SystemTray,
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Mutex;
 
 struct AppState {
@@ -33,141 +34,252 @@ struct Note {
     updated_at: String,
 }
 
-#[derive(Serialize, Deserialize)]
-struct CategoryIndex {
-    categories: Vec<Category>,
-    category_counter: u64,
+fn sanitize_path_component(input: &str) -> String {
+    let mut s: String = input
+        .chars()
+        .map(|c| match c {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '＿',
+            c if c.is_control() => ' ',
+            _ => c,
+        })
+        .collect();
+    s = s.trim().to_string();
+    while s.ends_with('.') || s.ends_with(' ') {
+        s.pop();
+    }
+    if s.is_empty() { "未命名".to_string() } else { s }
 }
 
-fn get_notes_dir(app_handle: &tauri::AppHandle) -> PathBuf {
-    let mut path = app_handle.path_resolver().app_data_dir().expect("Failed to get app data dir");
-    path.push("notes");
-    fs::create_dir_all(&path).expect("Failed to create notes dir");
+fn is_safe_id(id: &str) -> bool {
+    !(id.contains("..") || id.contains('/') || id.contains('\\'))
+}
+
+fn get_notes_root(app_handle: &tauri::AppHandle) -> PathBuf {
+    let base = app_handle
+        .path_resolver()
+        .document_dir()
+        .or_else(|| app_handle.path_resolver().app_data_dir())
+        .expect("Failed to get notes base dir");
+    let path = base.join("SideDrawerNotes");
+    fs::create_dir_all(&path).expect("Failed to create notes root dir");
     path
 }
 
-fn get_index_path(app_handle: &tauri::AppHandle) -> PathBuf {
-    get_notes_dir(app_handle).join("_categories.json")
+fn category_dir(app_handle: &tauri::AppHandle, category_id: &str) -> Result<PathBuf, String> {
+    if !is_safe_id(category_id) {
+        return Err("Invalid category id".into());
+    }
+    Ok(get_notes_root(app_handle).join(category_id))
 }
 
-fn read_index(app_handle: &tauri::AppHandle) -> CategoryIndex {
-    let path = get_index_path(app_handle);
-    if path.exists() {
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or(CategoryIndex { categories: vec![], category_counter: 0 })
+fn note_path(app_handle: &tauri::AppHandle, category_id: &str, note_id: &str) -> Result<PathBuf, String> {
+    if !is_safe_id(category_id) {
+        return Err("Invalid category id".into());
+    }
+    if !is_safe_id(note_id) {
+        return Err("Invalid note id".into());
+    }
+    Ok(get_notes_root(app_handle)
+        .join(category_id)
+        .join(format!("{}.md", note_id)))
+}
+
+fn parse_frontmatter(content: &str) -> (Option<std::collections::HashMap<String, String>>, String) {
+    if !content.starts_with("---\n") {
+        return (None, content.to_string());
+    }
+    let rest = &content[4..];
+    if let Some(end) = rest.find("\n---\n") {
+        let fm = &rest[..end];
+        let body = &rest[end + 5..];
+        let mut map = std::collections::HashMap::new();
+        for line in fm.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            if let Some((k, v)) = line.split_once(':') {
+                map.insert(k.trim().to_string(), v.trim().to_string());
+            }
+        }
+        (Some(map), body.to_string())
     } else {
-        CategoryIndex { categories: vec![], category_counter: 0 }
+        (None, content.to_string())
     }
 }
 
-fn save_index(app_handle: &tauri::AppHandle, index: &CategoryIndex) {
-    let path = get_index_path(app_handle);
-    fs::write(&path, serde_json::to_string_pretty(index).unwrap()).unwrap();
+fn extract_title(markdown: &str) -> String {
+    for line in markdown.lines() {
+        let t = line.trim();
+        if t.is_empty() { continue; }
+        let t = t.trim_start_matches('#').trim();
+        if t.is_empty() { continue; }
+        let mut s = t.to_string();
+        if s.len() > 80 {
+            s.truncate(80);
+        }
+        return s;
+    }
+    "未命名".to_string()
 }
 
-fn note_path(app_handle: &tauri::AppHandle, category_id: &str, note_id: &str) -> PathBuf {
-    get_notes_dir(app_handle).join(category_id).join(format!("{}.json", note_id))
+fn build_markdown_file(note_id: &str, created_at: &str, updated_at: &str, body: &str) -> String {
+    let title = extract_title(body);
+    format!(
+        "---\nid: {note_id}\ntitle: {title}\ncreated_at: {created_at}\nupdated_at: {updated_at}\n---\n{body}",
+    )
+}
+
+fn open_dir_in_explorer(path: &PathBuf) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Err("Explorer open is only supported on Windows".into())
+    }
+}
+
+#[tauri::command]
+fn get_notes_root_path(app_handle: tauri::AppHandle) -> String {
+    get_notes_root(&app_handle).to_string_lossy().to_string()
 }
 
 #[tauri::command]
 fn get_categories(app_handle: tauri::AppHandle) -> Vec<Category> {
-    read_index(&app_handle).categories
+    let root = get_notes_root(&app_handle);
+    let mut cats = Vec::new();
+    if let Ok(entries) = fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            if let Ok(ft) = entry.file_type() {
+                if !ft.is_dir() { continue; }
+            } else {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') { continue; }
+            cats.push(Category { id: name.clone(), name });
+        }
+    }
+    cats.sort_by(|a, b| a.name.cmp(&b.name));
+    cats
 }
 
 #[tauri::command]
 fn create_category(app_handle: tauri::AppHandle, name: String) -> Result<Category, String> {
-    let mut index = read_index(&app_handle);
-    index.category_counter += 1;
-    let id = format!("cat-{}", index.category_counter);
-
-    let cat_dir = get_notes_dir(&app_handle).join(&id);
+    let folder = sanitize_path_component(&name);
+    let cat_dir = get_notes_root(&app_handle).join(&folder);
+    if cat_dir.exists() {
+        return Err("Category already exists".into());
+    }
     fs::create_dir_all(&cat_dir).map_err(|e| e.to_string())?;
-
-    let cat = Category { id: id.clone(), name };
-    index.categories.push(cat.clone());
-    save_index(&app_handle, &index);
-    Ok(cat)
+    Ok(Category { id: folder.clone(), name: folder })
 }
 
 #[tauri::command]
 fn update_category(app_handle: tauri::AppHandle, category_id: String, name: String) -> Result<Category, String> {
-    let mut index = read_index(&app_handle);
-    let cat = index.categories.iter_mut()
-        .find(|c| c.id == category_id)
-        .ok_or("Category not found")?;
-    cat.name = name;
-    let result = cat.clone();
-    save_index(&app_handle, &index);
-    Ok(result)
+    let old_dir = category_dir(&app_handle, &category_id)?;
+    if !old_dir.exists() {
+        return Err("Category not found".into());
+    }
+    let folder = sanitize_path_component(&name);
+    let new_dir = get_notes_root(&app_handle).join(&folder);
+    if new_dir.exists() && folder != category_id {
+        return Err("Category already exists".into());
+    }
+    if folder != category_id {
+        fs::rename(&old_dir, &new_dir).map_err(|e| e.to_string())?;
+    }
+    Ok(Category { id: folder.clone(), name: folder })
 }
 
 #[tauri::command]
 fn delete_category(app_handle: tauri::AppHandle, category_id: String) -> Result<(), String> {
-    let cat_dir = get_notes_dir(&app_handle).join(&category_id);
+    let cat_dir = category_dir(&app_handle, &category_id)?;
     if cat_dir.exists() {
         fs::remove_dir_all(&cat_dir).map_err(|e| e.to_string())?;
     }
-    let mut index = read_index(&app_handle);
-    index.categories.retain(|c| c.id != category_id);
-    save_index(&app_handle, &index);
     Ok(())
 }
 
 #[tauri::command]
 fn get_notes(app_handle: tauri::AppHandle, category_id: String) -> Vec<Note> {
-    let cat_dir = get_notes_dir(&app_handle).join(&category_id);
+    let cat_dir = match category_dir(&app_handle, &category_id) {
+        Ok(p) => p,
+        Err(_) => return vec![],
+    };
     let mut notes = Vec::new();
     if let Ok(entries) = fs::read_dir(&cat_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            if path.extension().and_then(|s| s.to_str()) == Some("md") {
                 if let Ok(data) = fs::read_to_string(&path) {
-                    if let Ok(note) = serde_json::from_str::<Note>(&data) {
-                        notes.push(note);
-                    }
+                    let (fm, body) = parse_frontmatter(&data);
+                    let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                    if id.is_empty() { continue; }
+                    let created_at = fm.as_ref().and_then(|m| m.get("created_at").cloned()).unwrap_or_default();
+                    let updated_at = fm.as_ref().and_then(|m| m.get("updated_at").cloned()).unwrap_or_default();
+                    notes.push(Note {
+                        id,
+                        content: body,
+                        category_id: category_id.clone(),
+                        created_at,
+                        updated_at,
+                    });
                 }
             }
         }
     }
-    notes.sort_by_key(|n| n.updated_at.clone());
-    notes.reverse();
+    notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     notes
 }
 
 #[tauri::command]
 fn create_note(app_handle: tauri::AppHandle, category_id: String, id: String, content: String, created_at: String, updated_at: String) -> Result<Note, String> {
-    let cat_dir = get_notes_dir(&app_handle).join(&category_id);
+    let cat_dir = category_dir(&app_handle, &category_id)?;
     fs::create_dir_all(&cat_dir).map_err(|e| e.to_string())?;
 
-    let note = Note {
-        id: id.clone(),
+    let path = note_path(&app_handle, &category_id, &id)?;
+    if path.exists() {
+        return Err("Note already exists".into());
+    }
+    let file = build_markdown_file(&id, &created_at, &updated_at, &content);
+    fs::write(&path, file).map_err(|e| e.to_string())?;
+
+    Ok(Note {
+        id,
         content,
-        category_id: category_id.clone(),
+        category_id,
         created_at,
         updated_at,
-    };
-
-    let path = note_path(&app_handle, &category_id, &id);
-    fs::write(&path, serde_json::to_string_pretty(&note).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    Ok(note)
+    })
 }
 
 #[tauri::command]
 fn update_note(app_handle: tauri::AppHandle, category_id: String, note_id: String, content: String, updated_at: String) -> Result<Note, String> {
-    let path = note_path(&app_handle, &category_id, &note_id);
+    let path = note_path(&app_handle, &category_id, &note_id)?;
     let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut note: Note = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-    note.content = content;
-    note.updated_at = updated_at;
-    fs::write(&path, serde_json::to_string_pretty(&note).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    Ok(note)
+    let (fm, _body) = parse_frontmatter(&data);
+    let created_at = fm.as_ref().and_then(|m| m.get("created_at").cloned()).unwrap_or_default();
+    let file = build_markdown_file(&note_id, &created_at, &updated_at, &content);
+    fs::write(&path, file).map_err(|e| e.to_string())?;
+
+    Ok(Note {
+        id: note_id,
+        content,
+        category_id,
+        created_at,
+        updated_at,
+    })
 }
 
 #[tauri::command]
 fn delete_note(app_handle: tauri::AppHandle, category_id: String, note_id: String) -> Result<(), String> {
-    let path = note_path(&app_handle, &category_id, &note_id);
+    let path = note_path(&app_handle, &category_id, &note_id)?;
     if path.exists() {
         fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
@@ -287,10 +399,12 @@ fn undock_window(state: tauri::State<AppState>) {
 fn main() {
     let show_item = CustomMenuItem::new("show".to_string(), "显示");
     let hide_item = CustomMenuItem::new("hide".to_string(), "隐藏");
+    let open_notes_dir_item = CustomMenuItem::new("open_notes_dir".to_string(), "打开笔记目录");
     let quit_item = CustomMenuItem::new("quit".to_string(), "退出");
     let tray_menu = SystemTrayMenu::new()
         .add_item(show_item)
         .add_item(hide_item)
+        .add_item(open_notes_dir_item)
         .add_native_item(tauri::SystemTrayMenuItem::Separator)
         .add_item(quit_item);
 
@@ -312,6 +426,10 @@ fn main() {
                     match id.as_str() {
                         "show" => { window.show().unwrap(); window.set_focus().unwrap(); }
                         "hide" => { window.hide().unwrap(); }
+                        "open_notes_dir" => {
+                            let root = get_notes_root(&app.app_handle());
+                            let _ = open_dir_in_explorer(&root);
+                        }
                         "quit" => { std::process::exit(0); }
                         _ => {}
                     }
@@ -337,6 +455,7 @@ fn main() {
             collapse_docked,
             get_nearest_edge,
             undock_window,
+            get_notes_root_path,
             get_categories,
             create_category,
             update_category,

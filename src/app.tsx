@@ -64,10 +64,10 @@ export default function App() {
     noteCounterRef.current = cats.length;
   };
 
-  const loadNotes = async (categoryId: string) => {
+  const loadNotes = useCallback(async (categoryId: string) => {
     const ns: Note[] = await invoke('get_notes', { categoryId });
     setNotes(ns);
-  };
+  }, []);
 
   const handleToggle = useCallback(async () => {
     if (view === 'circle-sm') {
@@ -107,7 +107,7 @@ export default function App() {
     setView('panel');
     await invoke('resize_window', { width: 320, height: 500 });
     await loadNotes(catId);
-  }, []);
+  }, [loadNotes]);
 
   const handleBackToCircle = useCallback(async () => {
     setView('circle-lg');
@@ -128,9 +128,13 @@ export default function App() {
   }, []);
 
   const handleRenameCategory = useCallback(async (catId: string, name: string) => {
-    await invoke('update_category', { categoryId: catId, name });
-    setCategories(prev => prev.map(c => c.id === catId ? { ...c, name } : c));
-  }, []);
+    const updated: Category = await invoke('update_category', { categoryId: catId, name });
+    setCategories(prev => prev.map(c => c.id === catId ? updated : c));
+    if (selectedCategoryId === catId) {
+      setSelectedCategoryId(updated.id);
+      await loadNotes(updated.id);
+    }
+  }, [loadNotes, selectedCategoryId]);
 
   const handleCreateNote = useCallback(async (categoryId: string, content: string) => {
     noteCounterRef.current++;
