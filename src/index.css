@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background-color: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.custom-scrollbar::-webkit-scrollbar { width: 3px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #d4d4d4; border-radius: 3px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #a3a3a3; }
+
+.writing-vertical {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+.circle-sm {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.15),
+    0 1px 4px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.circle-lg {
+  width: 340px;
+  height: 340px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 3px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 8px 48px rgba(0, 0, 0, 0.2),
+    0 2px 8px rgba(0, 0, 0, 0.12);
+  transition: box-shadow 0.3s ease;
+}
+
+.circle-lg:hover {
+  box-shadow:
+    0 12px 56px rgba(0, 0, 0, 0.25),
+    0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.circle-lg svg {
+  border-radius: 50%;
+}
+
+.sector-path {
+  transition: opacity 0.2s, transform 0.2s, filter 0.2s;
+  transform-origin: center;
+}
+
+.sector-group:hover .sector-path {
+  opacity: 1 !important;
+  filter: brightness(1.15) drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  transform: scale(1.03);
+}
+
+.sector-group:active .sector-path {
+  transform: scale(0.96);
+  filter: brightness(0.95);
+}
+
+.add-center-circle {
+  transition: r 0.2s, fill 0.2s;
+}
+
+.add-center-btn:hover .add-center-circle {
+  fill: #3E2723;
+}
+
+.add-center-btn:hover text {
+  fill: white;
+}
+
+.bubble-enter {
+  animation: bubblePop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes bubblePop {
+  0% { opacity: 0; transform: scale(0.85) translateY(-4px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.context-menu-enter {
+  animation: menuFadeIn 0.15s ease-out forwards;
+}
+
+@keyframes menuFadeIn {
+  0% { opacity: 0; transform: scale(0.92) translateY(-4px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1); }
+  50% { box-shadow: 0 4px 32px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15); }
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 3s ease-in-out infinite;
+}
+
+.toast-enter {
+  animation: toastSlideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes toastSlideUp {
+  0% { opacity: 0; transform: translateY(12px) scale(0.95); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
