@@ -14,9 +14,10 @@ interface Props {
   notesByCategory: Record<string, Note[]>;
   onBack: () => void;
   onChooseNotesDir: () => void;
+  onCopiedAndClose: () => void;
 }
 
-export function QuickSearchPanel({ categories, notesByCategory, onBack, onChooseNotesDir }: Props) {
+export function QuickSearchPanel({ categories, notesByCategory, onBack, onChooseNotesDir, onCopiedAndClose }: Props) {
   const [q, setQ] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const { showToast } = useToast();
@@ -45,6 +46,7 @@ export function QuickSearchPanel({ categories, notesByCategory, onBack, onChoose
   const handleCopy = async (item: SearchItem) => {
     await writeText(item.note.content);
     showToast('已复制到剪贴板', 'copy');
+    onCopiedAndClose();
   };
 
   return (
@@ -65,6 +67,13 @@ export function QuickSearchPanel({ categories, notesByCategory, onBack, onChoose
             onChange={(e) => setQ(e.target.value)}
             className="flex-1 bg-transparent text-xs text-[#F9F6F0] outline-none placeholder:text-white/30"
             placeholder="搜索内容 / 分类..."
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') onBack();
+              if (e.key === 'Enter') {
+                const first = filtered[0];
+                if (first) handleCopy(first);
+              }
+            }}
           />
           {q && (
             <button

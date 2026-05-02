@@ -102,7 +102,8 @@ export function CircleView({ categories, collapsed, onToggle, onSelectCategory, 
       <div className="w-full h-full flex items-center justify-center bg-transparent" onMouseDown={startDragging}>
         <div
           className="circle-sm bg-gradient-to-br from-[#5D4037] to-[#3E2723] shadow-2xl flex items-center justify-center hover:scale-110 active:scale-95 transition-transform duration-200 animate-pulse-subtle"
-          onClick={(e) => { e.stopPropagation(); onToggle(); }}
+          onClick={(e) => { e.stopPropagation(); onOpenSearch(); }}
+          onDoubleClick={(e) => { e.stopPropagation(); onToggle(); }}
         >
           <span className="text-white font-bold text-[22px] select-none tracking-wider">N</span>
         </div>

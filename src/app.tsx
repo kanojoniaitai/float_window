@@ -139,6 +139,11 @@ export default function App() {
     await invoke('resize_window', { width: 360, height: 360 });
   }, []);
 
+  const handleCopiedAndClose = useCallback(async () => {
+    setView('circle-sm');
+    await invoke('resize_window', { width: 80, height: 80 });
+  }, []);
+
   const handleAddCategory = useCallback(async (name: string) => {
     const cat: Category = await invoke('create_category', { name });
     setCategories(prev => [...prev, cat]);
@@ -315,6 +320,7 @@ export default function App() {
           notesByCategory={notesByCategory}
           onBack={handleBackFromSearch}
           onChooseNotesDir={handleChooseNotesDir}
+          onCopiedAndClose={handleCopiedAndClose}
         />
       </ToastProvider>
     );
