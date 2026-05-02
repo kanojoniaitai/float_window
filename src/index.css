@@ -135,7 +135,7 @@ body {
   background:
     radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 55%),
     radial-gradient(circle at 65% 70%, rgba(255, 188, 155, 0.18), rgba(0, 0, 0, 0) 60%);
-  filter: blur(10px);
+  filter: blur(7px);
   opacity: 0.85;
   transition: opacity 180ms ease, transform 220ms ease;
 }
@@ -306,7 +306,7 @@ body {
 }
 
 .listWrap {
-  height: calc(100vh - 210px);
+  height: calc(100vh - 258px);
   overflow: auto;
   padding-right: 2px;
 }
@@ -396,4 +396,78 @@ body {
   margin-top: 6px;
   font-size: 11px;
   color: rgba(255, 255, 255, 0.5);
+}
+
+.groupBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: auto;
+  padding-bottom: 2px;
+}
+
+.groupBar::-webkit-scrollbar { height: 3px; }
+.groupBar::-webkit-scrollbar-track { background: transparent; }
+.groupBar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+
+.groupChip {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.68);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupChip:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
+  transform: translateY(-1px);
+}
+
+.groupChipActive {
+  color: rgba(10, 10, 12, 0.92);
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(255, 255, 255, 0.9);
+}
+
+.groupChipAdd {
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 150, 120, 0.18);
+  border-color: rgba(255, 150, 120, 0.26);
+}
+
+.groupAddWrap {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.groupAddInput {
+  width: 140px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+}
+
+.groupAddOk {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(10, 10, 12, 0.92);
+  background: rgba(255, 255, 255, 0.9);
 }

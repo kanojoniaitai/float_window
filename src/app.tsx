@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { open } from '@tauri-apps/api/dialog';
 import { appWindow } from '@tauri-apps/api/window';
-import { ToastProvider, useToast } from './components/Toast';
+import { ToastProvider } from './components/Toast';
 import { QuickSearchPanel } from './components/QuickSearchPanel';
 import './index.css';
 
@@ -129,6 +129,15 @@ export default function App() {
     setNotesByCategory(prev => ({ ...prev, [catId]: [note, ...(prev[catId] || [])] }));
   }, [ensureCategoryId]);
 
+  const createGroup = useCallback(async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (categories.some(c => c.name === trimmed)) return;
+    const created: Category = await invoke('create_category', { name: trimmed });
+    setCategories(prev => [...prev, created]);
+    setNotesByCategory(prev => ({ ...prev, [created.id]: prev[created.id] || [] }));
+  }, [categories]);
+
   if (view === 'panel') {
     return (
       <ToastProvider>
@@ -138,6 +147,7 @@ export default function App() {
           notes={sortedNotes}
           onClose={closePanel}
           onChooseNotesDir={chooseNotesDir}
+          onCreateGroup={createGroup}
           onCreateNote={createNote}
         />
       </ToastProvider>
@@ -152,8 +162,6 @@ export default function App() {
 }
 
 function FloatingBall({ onOpen, mouseDownRef }: { onOpen: () => void; mouseDownRef: MutableRefObject<{ x: number; y: number; dragging: boolean; armed: boolean } | null> }) {
-  const { showToast } = useToast();
-
   const onMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     mouseDownRef.current = { x: e.clientX, y: e.clientY, dragging: false, armed: true };
@@ -168,7 +176,6 @@ function FloatingBall({ onOpen, mouseDownRef }: { onOpen: () => void; mouseDownR
       st.dragging = true;
       st.armed = false;
       appWindow.startDragging();
-      showToast('拖动悬浮球可移动位置', 'success');
     }
   };
 

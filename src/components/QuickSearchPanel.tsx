@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { writeText } from '@tauri-apps/api/clipboard';
+import { appWindow } from '@tauri-apps/api/window';
 import { FolderCog, Plus, Search, X, Copy, Check } from 'lucide-react';
 import type { Category, Note } from '../app';
 import { useToast } from './Toast';
@@ -12,6 +13,7 @@ interface Props {
   notes: Row[];
   onClose: () => void;
   onChooseNotesDir: () => void;
+  onCreateGroup: (name: string) => Promise<void>;
   onCreateNote: (categoryName: string, content: string) => Promise<void>;
 }
 
@@ -21,13 +23,17 @@ function firstLine(markdown: string): string {
   return line.replace(/^#+\s*/, '').trim().slice(0, 80) || '未命名';
 }
 
-export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClose, onChooseNotesDir, onCreateNote }: Props) {
+export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClose, onChooseNotesDir, onCreateGroup, onCreateNote }: Props) {
   const [q, setQ] = useState('');
+  const [activeGroup, setActiveGroup] = useState<string>('__all__');
   const [composerOpen, setComposerOpen] = useState(false);
+  const [groupDraft, setGroupDraft] = useState('');
+  const [addingGroup, setAddingGroup] = useState(false);
   const [categoryName, setCategoryName] = useState(defaultCategoryName);
   const [content, setContent] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const composeRef = useRef<HTMLTextAreaElement>(null);
+  const groupInputRef = useRef<HTMLInputElement>(null);
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -35,21 +41,56 @@ export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClo
   }, []);
 
   useEffect(() => {
+    if (addingGroup) groupInputRef.current?.focus();
+  }, [addingGroup]);
+
+  useEffect(() => {
     if (composerOpen) composeRef.current?.focus();
   }, [composerOpen]);
 
+  useEffect(() => {
+    if (activeGroup !== '__all__') {
+      const target = categories.find(c => c.id === activeGroup);
+      if (target) setCategoryName(target.name);
+    } else {
+      setCategoryName(defaultCategoryName);
+    }
+  }, [activeGroup, categories, defaultCategoryName]);
+
+  const visibleCategories = useMemo(() => {
+    return [...categories].sort((a, b) => a.name.localeCompare(b.name));
+  }, [categories]);
+
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
-    if (!query) return notes;
-    return notes.filter(r => {
+    const base = activeGroup === '__all__' ? notes : notes.filter(r => r.category.id === activeGroup);
+    if (!query) return base;
+    return base.filter(r => {
       return r.category.name.toLowerCase().includes(query) || r.note.content.toLowerCase().includes(query);
     });
-  }, [notes, q]);
+  }, [activeGroup, notes, q]);
 
   const copyAndClose = async (row: Row) => {
     await writeText(row.note.content);
     showToast('已复制到剪贴板', 'copy');
     onClose();
+  };
+
+  const handleHeaderMouseDown = (e: React.MouseEvent) => {
+    const el = e.target as HTMLElement;
+    if (el.closest('[data-no-drag="1"]')) return;
+    appWindow.startDragging();
+  };
+
+  const submitNewGroup = async () => {
+    const name = groupDraft.trim();
+    if (!name) return;
+    await onCreateGroup(name);
+    setGroupDraft('');
+    setAddingGroup(false);
+    setActiveGroup('__all__');
+    showToast('已创建分组', 'success');
+    searchRef.current?.focus();
   };
 
   const saveNote = async () => {
@@ -67,7 +108,7 @@ export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClo
   return (
     <div className="w-full h-full p-3">
       <div className="panelRoot w-full h-full rounded-[22px] overflow-hidden">
-        <div className="panelHeader px-3.5 py-3 flex items-center gap-2">
+        <div className="panelHeader px-3.5 py-3 flex items-center gap-2" onMouseDown={handleHeaderMouseDown}>
           <div className="min-w-0 flex-1">
             <div className="text-[11px] tracking-[0.22em] uppercase text-white/60">
               Float Notes
@@ -80,6 +121,7 @@ export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClo
             className="iconBtn"
             onClick={onChooseNotesDir}
             title="选择笔记目录"
+            data-no-drag="1"
           >
             <FolderCog size={16} />
           </button>
@@ -87,6 +129,7 @@ export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClo
             className="iconBtn"
             onClick={onClose}
             title="关闭"
+            data-no-drag="1"
           >
             <X size={16} />
           </button>
@@ -109,12 +152,14 @@ export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClo
                   if (first) copyAndClose(first);
                 }
               }}
+              data-no-drag="1"
             />
             {q && (
               <button
                 className="chipBtn"
                 onClick={() => { setQ(''); searchRef.current?.focus(); }}
                 title="清空"
+                data-no-drag="1"
               >
                 清空
               </button>
@@ -123,10 +168,58 @@ export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClo
               className="primaryBtn flex items-center gap-1.5"
               onClick={() => setComposerOpen(v => !v)}
               title="新建笔记"
+              data-no-drag="1"
             >
               <Plus size={14} />
               新建
             </button>
+          </div>
+        </div>
+
+        <div className="px-3.5 pb-3">
+          <div className="groupBar">
+            <button
+              className={`groupChip ${activeGroup === '__all__' ? 'groupChipActive' : ''}`}
+              onClick={() => setActiveGroup('__all__')}
+              data-no-drag="1"
+            >
+              全部
+            </button>
+            {visibleCategories.map(c => (
+              <button
+                key={c.id}
+                className={`groupChip ${activeGroup === c.id ? 'groupChipActive' : ''}`}
+                onClick={() => setActiveGroup(c.id)}
+                title={c.name}
+                data-no-drag="1"
+              >
+                {c.name}
+              </button>
+            ))}
+            {addingGroup ? (
+              <div className="groupAddWrap" data-no-drag="1">
+                <input
+                  ref={groupInputRef}
+                  value={groupDraft}
+                  onChange={(e) => setGroupDraft(e.target.value)}
+                  className="groupAddInput"
+                  placeholder="新分组名…"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') { setAddingGroup(false); setGroupDraft(''); }
+                    if (e.key === 'Enter') submitNewGroup();
+                  }}
+                />
+                <button className="groupAddOk" onClick={submitNewGroup}>创建</button>
+              </div>
+            ) : (
+              <button
+                className="groupChip groupChipAdd"
+                onClick={() => setAddingGroup(true)}
+                data-no-drag="1"
+              >
+                + 分组
+              </button>
+            )}
           </div>
         </div>
 
@@ -139,21 +232,16 @@ export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClo
                   value={categoryName}
                   onChange={(e) => setCategoryName(e.target.value)}
                   className="selectField flex-1"
+                  data-no-drag="1"
                 >
-                  <option value={defaultCategoryName}>{defaultCategoryName}</option>
                   {categories
                     .filter(c => c.name !== defaultCategoryName)
                     .sort((a, b) => a.name.localeCompare(b.name))
                     .map(c => (
                       <option key={c.id} value={c.name}>{c.name}</option>
                     ))}
+                  <option value={defaultCategoryName}>{defaultCategoryName}</option>
                 </select>
-                <input
-                  value={categoryName}
-                  onChange={(e) => setCategoryName(e.target.value)}
-                  className="textField w-[132px]"
-                  placeholder="或输入新分类"
-                />
               </div>
               <div className="mt-2">
                 <textarea
@@ -170,18 +258,21 @@ export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClo
                       saveNote();
                     }
                   }}
+                  data-no-drag="1"
                 />
               </div>
               <div className="mt-2 flex items-center justify-between gap-2">
                 <button
                   className="chipBtn"
                   onClick={() => { setComposerOpen(false); setContent(''); }}
+                  data-no-drag="1"
                 >
                   取消
                 </button>
                 <button
                   className="saveBtn flex items-center gap-1.5"
                   onClick={saveNote}
+                  data-no-drag="1"
                 >
                   <Check size={14} />
                   保存
