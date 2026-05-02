@@ -34,6 +34,11 @@ struct Note {
     updated_at: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+struct Settings {
+    notes_root: Option<String>,
+}
+
 fn sanitize_path_component(input: &str) -> String {
     let mut s: String = input
         .chars()
@@ -54,15 +59,53 @@ fn is_safe_id(id: &str) -> bool {
     !(id.contains("..") || id.contains('/') || id.contains('\\'))
 }
 
-fn get_notes_root(app_handle: &tauri::AppHandle) -> PathBuf {
+fn get_settings_path(app_handle: &tauri::AppHandle) -> PathBuf {
+    let dir = app_handle
+        .path_resolver()
+        .app_data_dir()
+        .expect("Failed to get app data dir");
+    fs::create_dir_all(&dir).expect("Failed to create app data dir");
+    dir.join("settings.json")
+}
+
+fn read_settings(app_handle: &tauri::AppHandle) -> Settings {
+    let path = get_settings_path(app_handle);
+    if !path.exists() {
+        return Settings::default();
+    }
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_settings(app_handle: &tauri::AppHandle, settings: &Settings) -> Result<(), String> {
+    let path = get_settings_path(app_handle);
+    fs::write(&path, serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn resolve_notes_root(app_handle: &tauri::AppHandle) -> PathBuf {
+    let settings = read_settings(app_handle);
+    if let Some(p) = settings.notes_root {
+        let candidate = PathBuf::from(p);
+        if candidate.is_absolute() {
+            let _ = fs::create_dir_all(&candidate);
+            return candidate;
+        }
+    }
     let base = app_handle
         .path_resolver()
-        .document_dir()
-        .or_else(|| app_handle.path_resolver().app_data_dir())
-        .expect("Failed to get notes base dir");
+        .app_data_dir()
+        .expect("Failed to get app data dir");
     let path = base.join("SideDrawerNotes");
     fs::create_dir_all(&path).expect("Failed to create notes root dir");
     path
+}
+
+fn get_notes_root(app_handle: &tauri::AppHandle) -> PathBuf {
+    resolve_notes_root(app_handle)
 }
 
 fn category_dir(app_handle: &tauri::AppHandle, category_id: &str) -> Result<PathBuf, String> {
@@ -147,6 +190,28 @@ fn open_dir_in_explorer(path: &PathBuf) -> Result<(), String> {
 #[tauri::command]
 fn get_notes_root_path(app_handle: tauri::AppHandle) -> String {
     get_notes_root(&app_handle).to_string_lossy().to_string()
+}
+
+#[tauri::command]
+fn set_notes_base_path(app_handle: tauri::AppHandle, path: String) -> Result<(), String> {
+    let p = PathBuf::from(path);
+    if !p.is_absolute() {
+        return Err("Path must be absolute".into());
+    }
+    let mut settings = read_settings(&app_handle);
+    settings.notes_root = Some(p.to_string_lossy().to_string());
+    save_settings(&app_handle, &settings)?;
+    let root = get_notes_root(&app_handle);
+    fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn reset_notes_base_path(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let mut settings = read_settings(&app_handle);
+    settings.notes_root = None;
+    save_settings(&app_handle, &settings)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -456,6 +521,8 @@ fn main() {
             get_nearest_edge,
             undock_window,
             get_notes_root_path,
+            set_notes_base_path,
+            reset_notes_base_path,
             get_categories,
             create_category,
             update_category,

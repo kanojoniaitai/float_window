@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
+import { open } from '@tauri-apps/api/dialog';
 import { CircleView } from './components/CircleView';
 import { CategoryPanel } from './components/CategoryPanel';
+import { QuickSearchPanel } from './components/QuickSearchPanel';
 import { ToastProvider } from './components/Toast';
 import './index.css';
 
@@ -18,11 +20,12 @@ export interface Note {
   updated_at: string;
 }
 
-type ViewState = 'circle-sm' | 'circle-lg' | 'panel';
+type ViewState = 'circle-sm' | 'circle-lg' | 'panel' | 'search';
 
 export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
+  const [notesByCategory, setNotesByCategory] = useState<Record<string, Note[]>>({});
   const [view, setView] = useState<ViewState>('circle-sm');
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [isDocked, setIsDocked] = useState(false);
@@ -34,9 +37,16 @@ export default function App() {
   const shrinkRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noteCounterRef = useRef(0);
   const isHoverExpandedRef = useRef(false);
-  const categoriesLoadedRef = useRef(false);
+  const loadingAllNotesRef = useRef(false);
 
-  useEffect(() => { loadCategories(); }, []);
+  const loadCategories = useCallback(async () => {
+    const cats: Category[] = await invoke('get_categories');
+    setCategories(cats);
+    noteCounterRef.current = cats.length;
+    return cats;
+  }, []);
+
+  useEffect(() => { loadCategories(); }, [loadCategories]);
 
   useEffect(() => {
     const handleMouseUp = async () => {
@@ -56,18 +66,26 @@ export default function App() {
     return () => document.removeEventListener('mouseup', handleMouseUp);
   }, [view]);
 
-  const loadCategories = async () => {
-    if (categoriesLoadedRef.current) return;
-    categoriesLoadedRef.current = true;
-    const cats: Category[] = await invoke('get_categories');
-    setCategories(cats);
-    noteCounterRef.current = cats.length;
-  };
-
   const loadNotes = useCallback(async (categoryId: string) => {
     const ns: Note[] = await invoke('get_notes', { categoryId });
     setNotes(ns);
   }, []);
+
+  const loadAllNotes = useCallback(async (cats?: Category[]) => {
+    if (loadingAllNotesRef.current) return;
+    loadingAllNotesRef.current = true;
+    try {
+      const list = cats || categories;
+      const map: Record<string, Note[]> = {};
+      for (const c of list) {
+        const ns: Note[] = await invoke('get_notes', { categoryId: c.id });
+        map[c.id] = ns;
+      }
+      setNotesByCategory(map);
+    } finally {
+      loadingAllNotesRef.current = false;
+    }
+  }, [categories]);
 
   const handleToggle = useCallback(async () => {
     if (view === 'circle-sm') {
@@ -116,25 +134,67 @@ export default function App() {
     await invoke('resize_window', { width: 360, height: 360 });
   }, []);
 
+  const handleBackFromSearch = useCallback(async () => {
+    setView('circle-lg');
+    await invoke('resize_window', { width: 360, height: 360 });
+  }, []);
+
   const handleAddCategory = useCallback(async (name: string) => {
     const cat: Category = await invoke('create_category', { name });
     setCategories(prev => [...prev, cat]);
+    setNotesByCategory(prev => ({ ...prev, [cat.id]: prev[cat.id] || [] }));
     return cat;
   }, []);
 
   const handleDeleteCategory = useCallback(async (catId: string) => {
     await invoke('delete_category', { categoryId: catId });
     setCategories(prev => prev.filter(c => c.id !== catId));
+    setNotesByCategory(prev => {
+      const next = { ...prev };
+      delete next[catId];
+      return next;
+    });
   }, []);
 
   const handleRenameCategory = useCallback(async (catId: string, name: string) => {
     const updated: Category = await invoke('update_category', { categoryId: catId, name });
     setCategories(prev => prev.map(c => c.id === catId ? updated : c));
+    setNotesByCategory(prev => {
+      if (updated.id === catId) return prev;
+      const next = { ...prev };
+      const oldNotes = next[catId] || [];
+      delete next[catId];
+      next[updated.id] = oldNotes;
+      return next;
+    });
     if (selectedCategoryId === catId) {
       setSelectedCategoryId(updated.id);
       await loadNotes(updated.id);
     }
   }, [loadNotes, selectedCategoryId]);
+
+  const handleChooseNotesDir = useCallback(async () => {
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected) return;
+    const path = Array.isArray(selected) ? selected[0] : selected;
+    if (!path) return;
+    await invoke('set_notes_base_path', { path });
+    setSelectedCategoryId(null);
+    setNotes([]);
+    setNotesByCategory({});
+    await loadCategories();
+    if (view === 'panel' || view === 'search') {
+      setView('circle-lg');
+      await invoke('resize_window', { width: 360, height: 360 });
+    }
+  }, [loadCategories, view]);
+
+  const handleOpenSearch = useCallback(async () => {
+    const cats = categories.length ? categories : await loadCategories();
+    await loadAllNotes(cats);
+    setView('search');
+    await invoke('resize_window', { width: 360, height: 520 });
+  }, [categories, loadAllNotes, loadCategories]);
 
   const handleCreateNote = useCallback(async (categoryId: string, content: string) => {
     noteCounterRef.current++;
@@ -148,6 +208,7 @@ export default function App() {
       updatedAt: now,
     });
     setNotes(prev => [note, ...prev]);
+    setNotesByCategory(prev => ({ ...prev, [categoryId]: [note, ...(prev[categoryId] || [])] }));
   }, []);
 
   const handleUpdateNote = useCallback(async (noteId: string, content: string) => {
@@ -162,12 +223,20 @@ export default function App() {
     setNotes(prev => prev.map(n =>
       n.id === noteId ? { ...n, content, updated_at: now } : n
     ));
+    setNotesByCategory(prev => ({
+      ...prev,
+      [selectedCategoryId]: (prev[selectedCategoryId] || []).map(n => n.id === noteId ? { ...n, content, updated_at: now } : n),
+    }));
   }, [selectedCategoryId]);
 
   const handleDeleteNote = useCallback(async (noteId: string) => {
     if (!selectedCategoryId) return;
     await invoke('delete_note', { categoryId: selectedCategoryId, noteId });
     setNotes(prev => prev.filter(n => n.id !== noteId));
+    setNotesByCategory(prev => ({
+      ...prev,
+      [selectedCategoryId]: (prev[selectedCategoryId] || []).filter(n => n.id !== noteId),
+    }));
   }, [selectedCategoryId]);
 
   const handleDragStart = useCallback(() => {
@@ -238,6 +307,19 @@ export default function App() {
     );
   }
 
+  if (view === 'search') {
+    return (
+      <ToastProvider>
+        <QuickSearchPanel
+          categories={categories}
+          notesByCategory={notesByCategory}
+          onBack={handleBackFromSearch}
+          onChooseNotesDir={handleChooseNotesDir}
+        />
+      </ToastProvider>
+    );
+  }
+
   return (
     <ToastProvider>
       <div
@@ -256,6 +338,8 @@ export default function App() {
                 onAddCategory={handleAddCategory}
                 onDeleteCategory={handleDeleteCategory}
                 onDragStart={handleDragStart}
+                onOpenSearch={handleOpenSearch}
+                onChooseNotesDir={handleChooseNotesDir}
               />
             </div>
           ) : (
@@ -268,6 +352,8 @@ export default function App() {
                 onAddCategory={handleAddCategory}
                 onDeleteCategory={handleDeleteCategory}
                 onDragStart={handleDragStart}
+                onOpenSearch={handleOpenSearch}
+                onChooseNotesDir={handleChooseNotesDir}
               />
             </div>
           )}

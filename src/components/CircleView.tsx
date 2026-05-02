@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Category } from '../app';
 import { appWindow } from '@tauri-apps/api/window';
+import { Search, FolderCog } from 'lucide-react';
 
 const COLORS = [
   '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
@@ -17,6 +18,8 @@ interface Props {
   onAddCategory: (name: string) => Promise<Category>;
   onDeleteCategory: (id: string) => void;
   onDragStart: () => void;
+  onOpenSearch: () => void;
+  onChooseNotesDir: () => void;
 }
 
 function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
@@ -36,7 +39,7 @@ function textPosition(cx: number, cy: number, r: number, startDeg: number, endDe
   return polarToCartesian(cx, cy, r * 0.62, mid);
 }
 
-export function CircleView({ categories, collapsed, onToggle, onSelectCategory, onAddCategory, onDeleteCategory, onDragStart }: Props) {
+export function CircleView({ categories, collapsed, onToggle, onSelectCategory, onAddCategory, onDeleteCategory, onDragStart, onOpenSearch, onChooseNotesDir }: Props) {
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [targetMenu, setTargetMenu] = useState<{ catId: string; x: number; y: number } | null>(null);
@@ -116,6 +119,24 @@ export function CircleView({ categories, collapsed, onToggle, onSelectCategory, 
         className="circle-lg bg-white/10 backdrop-blur-sm shadow-2xl relative"
         onMouseDown={startDragging}
       >
+        <div className="absolute top-3 right-3 flex items-center gap-1.5 z-20">
+          <button
+            className="w-7 h-7 rounded-full bg-[#3E2723]/70 hover:bg-[#3E2723] transition-colors flex items-center justify-center"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onOpenSearch(); }}
+            title="搜索笔记"
+          >
+            <Search size={14} className="text-white/80" />
+          </button>
+          <button
+            className="w-7 h-7 rounded-full bg-[#3E2723]/55 hover:bg-[#3E2723] transition-colors flex items-center justify-center"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onChooseNotesDir(); }}
+            title="选择笔记目录"
+          >
+            <FolderCog size={14} className="text-white/70" />
+          </button>
+        </div>
         <svg viewBox={`0 0 ${size} ${size}`} className="w-full h-full">
           <defs>
             <filter id="sectorGlow">
