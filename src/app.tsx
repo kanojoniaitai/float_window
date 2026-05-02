@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import type { MutableRefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { open } from '@tauri-apps/api/dialog';
-import { CircleView } from './components/CircleView';
-import { CategoryPanel } from './components/CategoryPanel';
+import { appWindow } from '@tauri-apps/api/window';
+import { ToastProvider, useToast } from './components/Toast';
 import { QuickSearchPanel } from './components/QuickSearchPanel';
-import { ToastProvider } from './components/Toast';
 import './index.css';
 
 export interface Category {
@@ -20,24 +20,17 @@ export interface Note {
   updated_at: string;
 }
 
-type ViewState = 'circle-sm' | 'circle-lg' | 'panel' | 'search';
+type ViewState = 'ball' | 'panel';
+
+const DEFAULT_CATEGORY = 'Inbox';
 
 export default function App() {
+  const [view, setView] = useState<ViewState>('ball');
   const [categories, setCategories] = useState<Category[]>([]);
-  const [notes, setNotes] = useState<Note[]>([]);
   const [notesByCategory, setNotesByCategory] = useState<Record<string, Note[]>>({});
-  const [view, setView] = useState<ViewState>('circle-sm');
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
-  const [isDocked, setIsDocked] = useState(false);
-  const [dockedEdge, setDockedEdge] = useState<string | null>(null);
-  const [isStripHover, setIsStripHover] = useState(false);
 
-  const isDraggingRef = useRef(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const shrinkRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mouseDownRef = useRef<{ x: number; y: number; dragging: boolean; armed: boolean } | null>(null);
   const noteCounterRef = useRef(0);
-  const isHoverExpandedRef = useRef(false);
-  const loadingAllNotesRef = useRef(false);
 
   const loadCategories = useCallback(async () => {
     const cats: Category[] = await invoke('get_categories');
@@ -46,281 +39,106 @@ export default function App() {
     return cats;
   }, []);
 
-  useEffect(() => { loadCategories(); }, [loadCategories]);
-
-  useEffect(() => {
-    const handleMouseUp = async () => {
-      if (!isDraggingRef.current) return;
-      isDraggingRef.current = false;
-      if (view === 'circle-lg' || view === 'circle-sm') {
-        const edge = await invoke<string | null>('get_nearest_edge');
-        if (edge) {
-          await invoke('dock_to_edge', { edge });
-          setIsDocked(true);
-          setDockedEdge(edge);
-          setView('circle-sm');
-        }
-      }
-    };
-    document.addEventListener('mouseup', handleMouseUp);
-    return () => document.removeEventListener('mouseup', handleMouseUp);
-  }, [view]);
-
-  const loadNotes = useCallback(async (categoryId: string) => {
-    const ns: Note[] = await invoke('get_notes', { categoryId });
-    setNotes(ns);
-  }, []);
+  const ensureDefaultCategory = useCallback(async (cats?: Category[]) => {
+    const list = cats || categories;
+    if (list.some(c => c.name === DEFAULT_CATEGORY)) return;
+    try {
+      const created: Category = await invoke('create_category', { name: DEFAULT_CATEGORY });
+      setCategories(prev => [...prev, created]);
+      setNotesByCategory(prev => ({ ...prev, [created.id]: prev[created.id] || [] }));
+    } catch {
+      const refreshed = await loadCategories();
+      setCategories(refreshed);
+    }
+  }, [categories, loadCategories]);
 
   const loadAllNotes = useCallback(async (cats?: Category[]) => {
-    if (loadingAllNotesRef.current) return;
-    loadingAllNotesRef.current = true;
-    try {
-      const list = cats || categories;
-      const map: Record<string, Note[]> = {};
-      for (const c of list) {
-        const ns: Note[] = await invoke('get_notes', { categoryId: c.id });
-        map[c.id] = ns;
-      }
-      setNotesByCategory(map);
-    } finally {
-      loadingAllNotesRef.current = false;
+    const list = cats || categories;
+    const map: Record<string, Note[]> = {};
+    for (const c of list) {
+      const ns: Note[] = await invoke('get_notes', { categoryId: c.id });
+      map[c.id] = ns;
     }
+    setNotesByCategory(map);
   }, [categories]);
 
-  const handleToggle = useCallback(async () => {
-    if (view === 'circle-sm') {
-      setView('circle-lg');
-      await invoke('resize_window', { width: 360, height: 360 });
-    } else {
-      setView('circle-sm');
-      await invoke('resize_window', { width: 80, height: 80 });
-    }
-  }, [view]);
+  useEffect(() => {
+    (async () => {
+      const cats = await loadCategories();
+      await ensureDefaultCategory(cats);
+      await loadAllNotes(cats);
+    })();
+  }, [ensureDefaultCategory, loadAllNotes, loadCategories]);
 
-  const handleCircleEnter = useCallback(async () => {
-    if (view === 'circle-sm' && !isDocked && !isHoverExpandedRef.current) {
-      isHoverExpandedRef.current = true;
-      if (shrinkRef.current) clearTimeout(shrinkRef.current);
-      setView('circle-lg');
-      await invoke('resize_window', { width: 360, height: 360 });
+  const sortedNotes = useMemo(() => {
+    const items: Array<{ category: Category; note: Note }> = [];
+    for (const c of categories) {
+      const ns = notesByCategory[c.id] || [];
+      for (const n of ns) items.push({ category: c, note: n });
     }
-  }, [view, isDocked]);
+    items.sort((a, b) => b.note.updated_at.localeCompare(a.note.updated_at));
+    return items;
+  }, [categories, notesByCategory]);
 
-  const handleCircleLeave = useCallback(() => {
-    if (view === 'circle-lg' && !isDocked && isHoverExpandedRef.current) {
-      isHoverExpandedRef.current = false;
-      shrinkRef.current = setTimeout(async () => {
-        if (!isHoverExpandedRef.current) {
-          setView('circle-sm');
-          await invoke('resize_window', { width: 80, height: 80 });
-        }
-      }, 500);
-    }
-  }, [view, isDocked]);
-
-  const handleSelectCategory = useCallback(async (catId: string) => {
-    isHoverExpandedRef.current = false;
-    if (shrinkRef.current) clearTimeout(shrinkRef.current);
-    setSelectedCategoryId(catId);
+  const openPanel = useCallback(async () => {
+    const cats = categories.length ? categories : await loadCategories();
+    await ensureDefaultCategory(cats);
+    await loadAllNotes(cats);
     setView('panel');
-    await invoke('resize_window', { width: 320, height: 500 });
-    await loadNotes(catId);
-  }, [loadNotes]);
+    await invoke('resize_window', { width: 380, height: 560 });
+  }, [categories, ensureDefaultCategory, loadAllNotes, loadCategories]);
 
-  const handleBackToCircle = useCallback(async () => {
-    setView('circle-lg');
-    setSelectedCategoryId(null);
-    setNotes([]);
-    await invoke('resize_window', { width: 360, height: 360 });
-  }, []);
-
-  const handleBackFromSearch = useCallback(async () => {
-    setView('circle-lg');
-    await invoke('resize_window', { width: 360, height: 360 });
-  }, []);
-
-  const handleCopiedAndClose = useCallback(async () => {
-    setView('circle-sm');
+  const closePanel = useCallback(async () => {
+    setView('ball');
     await invoke('resize_window', { width: 80, height: 80 });
   }, []);
 
-  const handleAddCategory = useCallback(async (name: string) => {
-    const cat: Category = await invoke('create_category', { name });
-    setCategories(prev => [...prev, cat]);
-    setNotesByCategory(prev => ({ ...prev, [cat.id]: prev[cat.id] || [] }));
-    return cat;
-  }, []);
-
-  const handleDeleteCategory = useCallback(async (catId: string) => {
-    await invoke('delete_category', { categoryId: catId });
-    setCategories(prev => prev.filter(c => c.id !== catId));
-    setNotesByCategory(prev => {
-      const next = { ...prev };
-      delete next[catId];
-      return next;
-    });
-  }, []);
-
-  const handleRenameCategory = useCallback(async (catId: string, name: string) => {
-    const updated: Category = await invoke('update_category', { categoryId: catId, name });
-    setCategories(prev => prev.map(c => c.id === catId ? updated : c));
-    setNotesByCategory(prev => {
-      if (updated.id === catId) return prev;
-      const next = { ...prev };
-      const oldNotes = next[catId] || [];
-      delete next[catId];
-      next[updated.id] = oldNotes;
-      return next;
-    });
-    if (selectedCategoryId === catId) {
-      setSelectedCategoryId(updated.id);
-      await loadNotes(updated.id);
-    }
-  }, [loadNotes, selectedCategoryId]);
-
-  const handleChooseNotesDir = useCallback(async () => {
+  const chooseNotesDir = useCallback(async () => {
     const selected = await open({ directory: true, multiple: false });
     if (!selected) return;
     const path = Array.isArray(selected) ? selected[0] : selected;
     if (!path) return;
     await invoke('set_notes_base_path', { path });
-    setSelectedCategoryId(null);
-    setNotes([]);
-    setNotesByCategory({});
-    await loadCategories();
-    if (view === 'panel' || view === 'search') {
-      setView('circle-lg');
-      await invoke('resize_window', { width: 360, height: 360 });
-    }
-  }, [loadCategories, view]);
-
-  const handleOpenSearch = useCallback(async () => {
-    const cats = categories.length ? categories : await loadCategories();
+    const cats = await loadCategories();
+    await ensureDefaultCategory(cats);
     await loadAllNotes(cats);
-    setView('search');
-    await invoke('resize_window', { width: 360, height: 520 });
-  }, [categories, loadAllNotes, loadCategories]);
+  }, [ensureDefaultCategory, loadAllNotes, loadCategories]);
 
-  const handleCreateNote = useCallback(async (categoryId: string, content: string) => {
-    noteCounterRef.current++;
+  const ensureCategoryId = useCallback(async (name: string) => {
+    const trimmed = name.trim() || DEFAULT_CATEGORY;
+    const existing = categories.find(c => c.name === trimmed);
+    if (existing) return existing.id;
+    const created: Category = await invoke('create_category', { name: trimmed });
+    setCategories(prev => [...prev, created]);
+    setNotesByCategory(prev => ({ ...prev, [created.id]: prev[created.id] || [] }));
+    return created.id;
+  }, [categories]);
+
+  const createNote = useCallback(async (categoryName: string, content: string) => {
+    const catId = await ensureCategoryId(categoryName);
+    noteCounterRef.current += 1;
     const id = `note-${Date.now()}-${noteCounterRef.current}`;
     const now = new Date().toISOString();
     const note: Note = await invoke('create_note', {
-      categoryId,
+      categoryId: catId,
       id,
       content,
       createdAt: now,
       updatedAt: now,
     });
-    setNotes(prev => [note, ...prev]);
-    setNotesByCategory(prev => ({ ...prev, [categoryId]: [note, ...(prev[categoryId] || [])] }));
-  }, []);
+    setNotesByCategory(prev => ({ ...prev, [catId]: [note, ...(prev[catId] || [])] }));
+  }, [ensureCategoryId]);
 
-  const handleUpdateNote = useCallback(async (noteId: string, content: string) => {
-    if (!selectedCategoryId) return;
-    const now = new Date().toISOString();
-    await invoke('update_note', {
-      categoryId: selectedCategoryId,
-      noteId,
-      content,
-      updatedAt: now,
-    });
-    setNotes(prev => prev.map(n =>
-      n.id === noteId ? { ...n, content, updated_at: now } : n
-    ));
-    setNotesByCategory(prev => ({
-      ...prev,
-      [selectedCategoryId]: (prev[selectedCategoryId] || []).map(n => n.id === noteId ? { ...n, content, updated_at: now } : n),
-    }));
-  }, [selectedCategoryId]);
-
-  const handleDeleteNote = useCallback(async (noteId: string) => {
-    if (!selectedCategoryId) return;
-    await invoke('delete_note', { categoryId: selectedCategoryId, noteId });
-    setNotes(prev => prev.filter(n => n.id !== noteId));
-    setNotesByCategory(prev => ({
-      ...prev,
-      [selectedCategoryId]: (prev[selectedCategoryId] || []).filter(n => n.id !== noteId),
-    }));
-  }, [selectedCategoryId]);
-
-  const handleDragStart = useCallback(() => {
-    isDraggingRef.current = true;
-  }, []);
-
-  const handleDockedEnter = useCallback(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (isDocked && !isStripHover) {
-      invoke('expand_docked');
-      setIsStripHover(true);
-    }
-  }, [isDocked, isStripHover]);
-
-  const handleDockedLeave = useCallback(() => {
-    debounceRef.current = setTimeout(() => {
-      if (isDocked && isStripHover) {
-        invoke('collapse_docked');
-        setIsStripHover(false);
-      }
-    }, 400);
-  }, [isDocked, isStripHover]);
-
-  const handleMinimize = useCallback(async () => {
-    const edge = dockedEdge || await invoke<string | null>('get_nearest_edge') || 'right';
-    await invoke('dock_to_edge', { edge });
-    setIsDocked(true);
-    setDockedEdge(edge);
-    setIsStripHover(false);
-  }, [dockedEdge]);
-
-  if (isDocked && !isStripHover) {
-    return (
-      <ToastProvider>
-        <div
-          className="w-screen h-screen bg-transparent"
-          onMouseEnter={handleDockedEnter}
-          onMouseLeave={handleDockedLeave}
-        >
-          <div className={`w-full h-full bg-[#3E2723]/80 hover:bg-[#3E2723] transition-colors cursor-pointer flex items-center justify-center ${
-            (dockedEdge === 'left' || dockedEdge === 'right') ? 'flex-col' : 'flex-row'
-          }`}>
-            <span className={`text-white/60 text-[10px] select-none ${dockedEdge === 'top' || dockedEdge === 'bottom' ? '' : 'writing-vertical'}`}>
-              N
-            </span>
-          </div>
-        </div>
-      </ToastProvider>
-    );
-  }
-
-  if (view === 'panel' && selectedCategoryId) {
-    const category = categories.find(c => c.id === selectedCategoryId)!;
-    return (
-      <ToastProvider>
-        <CategoryPanel
-          category={category}
-          notes={notes}
-          onCreateNote={handleCreateNote}
-          onUpdateNote={handleUpdateNote}
-          onDeleteNote={handleDeleteNote}
-          onRenameCategory={handleRenameCategory}
-          onDeleteCategory={handleDeleteCategory}
-          onBack={handleBackToCircle}
-          onDragStart={handleDragStart}
-        />
-      </ToastProvider>
-    );
-  }
-
-  if (view === 'search') {
+  if (view === 'panel') {
     return (
       <ToastProvider>
         <QuickSearchPanel
           categories={categories}
-          notesByCategory={notesByCategory}
-          onBack={handleBackFromSearch}
-          onChooseNotesDir={handleChooseNotesDir}
-          onCopiedAndClose={handleCopiedAndClose}
+          defaultCategoryName={DEFAULT_CATEGORY}
+          notes={sortedNotes}
+          onClose={closePanel}
+          onChooseNotesDir={chooseNotesDir}
+          onCreateNote={createNote}
         />
       </ToastProvider>
     );
@@ -328,53 +146,52 @@ export default function App() {
 
   return (
     <ToastProvider>
-      <div
-        className="w-screen h-screen bg-transparent"
-        onMouseEnter={handleCircleEnter}
-        onMouseLeave={handleCircleLeave}
-      >
-        <div className="w-full h-full flex items-center justify-center bg-transparent">
-          {view === 'circle-sm' ? (
-            <div className="w-[72px] h-[72px]">
-              <CircleView
-                categories={categories}
-                collapsed={true}
-                onToggle={handleToggle}
-                onSelectCategory={handleSelectCategory}
-                onAddCategory={handleAddCategory}
-                onDeleteCategory={handleDeleteCategory}
-                onDragStart={handleDragStart}
-                onOpenSearch={handleOpenSearch}
-                onChooseNotesDir={handleChooseNotesDir}
-              />
-            </div>
-          ) : (
-            <div className="w-[340px] h-[340px]">
-              <CircleView
-                categories={categories}
-                collapsed={false}
-                onToggle={handleToggle}
-                onSelectCategory={handleSelectCategory}
-                onAddCategory={handleAddCategory}
-                onDeleteCategory={handleDeleteCategory}
-                onDragStart={handleDragStart}
-                onOpenSearch={handleOpenSearch}
-                onChooseNotesDir={handleChooseNotesDir}
-              />
-            </div>
-          )}
-        </div>
-        {view === 'circle-sm' && (
-          <button
-            className="fixed bottom-3 right-3 p-1.5 bg-[#3E2723]/60 hover:bg-[#3E2723] rounded-lg transition-colors z-50"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={handleMinimize}
-            title="贴边隐藏"
-          >
-            <span className="text-white/60 text-[10px]">—</span>
-          </button>
-        )}
-      </div>
+      <FloatingBall onOpen={openPanel} mouseDownRef={mouseDownRef} />
     </ToastProvider>
+  );
+}
+
+function FloatingBall({ onOpen, mouseDownRef }: { onOpen: () => void; mouseDownRef: MutableRefObject<{ x: number; y: number; dragging: boolean; armed: boolean } | null> }) {
+  const { showToast } = useToast();
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    mouseDownRef.current = { x: e.clientX, y: e.clientY, dragging: false, armed: true };
+  };
+
+  const onMouseMove = (e: React.MouseEvent) => {
+    const st = mouseDownRef.current;
+    if (!st?.armed || st.dragging) return;
+    const dx = e.clientX - st.x;
+    const dy = e.clientY - st.y;
+    if (Math.hypot(dx, dy) >= 4) {
+      st.dragging = true;
+      st.armed = false;
+      appWindow.startDragging();
+      showToast('拖动悬浮球可移动位置', 'success');
+    }
+  };
+
+  const onMouseUp = () => {
+    const st = mouseDownRef.current;
+    mouseDownRef.current = null;
+    if (!st) return;
+    if (!st.dragging) onOpen();
+  };
+
+  return (
+    <div className="w-screen h-screen bg-transparent grid place-items-center">
+      <div
+        className="ballRoot select-none"
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+      >
+        <div className="ballHalo" />
+        <div className="ballCore">
+          <span className="ballGlyph">N</span>
+        </div>
+      </div>
+    </div>
   );
 }

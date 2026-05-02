@@ -1,132 +1,233 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { writeText } from '@tauri-apps/api/clipboard';
-import { ArrowLeft, Search, X, Copy, FolderCog } from 'lucide-react';
+import { FolderCog, Plus, Search, X, Copy, Check } from 'lucide-react';
 import type { Category, Note } from '../app';
 import { useToast } from './Toast';
 
-type SearchItem = {
-  category: Category;
-  note: Note;
-};
+type Row = { category: Category; note: Note };
 
 interface Props {
   categories: Category[];
-  notesByCategory: Record<string, Note[]>;
-  onBack: () => void;
+  defaultCategoryName: string;
+  notes: Row[];
+  onClose: () => void;
   onChooseNotesDir: () => void;
-  onCopiedAndClose: () => void;
+  onCreateNote: (categoryName: string, content: string) => Promise<void>;
 }
 
-export function QuickSearchPanel({ categories, notesByCategory, onBack, onChooseNotesDir, onCopiedAndClose }: Props) {
+function firstLine(markdown: string): string {
+  const line = markdown.split('\n').find(l => l.trim());
+  if (!line) return '未命名';
+  return line.replace(/^#+\s*/, '').trim().slice(0, 80) || '未命名';
+}
+
+export function QuickSearchPanel({ categories, defaultCategoryName, notes, onClose, onChooseNotesDir, onCreateNote }: Props) {
   const [q, setQ] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [categoryName, setCategoryName] = useState(defaultCategoryName);
+  const [content, setContent] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+  const composeRef = useRef<HTMLTextAreaElement>(null);
   const { showToast } = useToast();
 
   useEffect(() => {
-    inputRef.current?.focus();
+    searchRef.current?.focus();
   }, []);
 
-  const allItems = useMemo(() => {
-    const out: SearchItem[] = [];
-    for (const c of categories) {
-      const ns = notesByCategory[c.id] || [];
-      for (const n of ns) out.push({ category: c, note: n });
-    }
-    return out;
-  }, [categories, notesByCategory]);
+  useEffect(() => {
+    if (composerOpen) composeRef.current?.focus();
+  }, [composerOpen]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
-    if (!query) return allItems;
-    return allItems.filter(({ note, category }) => {
-      return note.content.toLowerCase().includes(query) || category.name.toLowerCase().includes(query);
+    if (!query) return notes;
+    return notes.filter(r => {
+      return r.category.name.toLowerCase().includes(query) || r.note.content.toLowerCase().includes(query);
     });
-  }, [allItems, q]);
+  }, [notes, q]);
 
-  const handleCopy = async (item: SearchItem) => {
-    await writeText(item.note.content);
+  const copyAndClose = async (row: Row) => {
+    await writeText(row.note.content);
     showToast('已复制到剪贴板', 'copy');
-    onCopiedAndClose();
+    onClose();
+  };
+
+  const saveNote = async () => {
+    const body = content.trim();
+    if (!body) return;
+    const cat = categoryName.trim() || defaultCategoryName;
+    await onCreateNote(cat, body);
+    setContent('');
+    setComposerOpen(false);
+    setQ('');
+    showToast('已保存', 'success');
+    searchRef.current?.focus();
   };
 
   return (
-    <div className="w-full h-full flex flex-col rounded-xl overflow-hidden bg-[#F9F6F0]">
-      <div className="flex items-center gap-2 px-3 py-2.5 bg-[#3E2723] select-none shrink-0">
-        <button
-          onClick={onBack}
-          className="p-0.5 rounded hover:bg-white/10 transition-colors shrink-0"
-          title="返回"
-        >
-          <ArrowLeft size={14} className="text-white/70" />
-        </button>
-        <div className="flex items-center gap-2 flex-1 bg-white/10 rounded-lg px-2 py-1">
-          <Search size={13} className="text-white/60 shrink-0" />
-          <input
-            ref={inputRef}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            className="flex-1 bg-transparent text-xs text-[#F9F6F0] outline-none placeholder:text-white/30"
-            placeholder="搜索内容 / 分类..."
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') onBack();
-              if (e.key === 'Enter') {
-                const first = filtered[0];
-                if (first) handleCopy(first);
-              }
-            }}
-          />
-          {q && (
-            <button
-              onClick={() => { setQ(''); inputRef.current?.focus(); }}
-              className="p-0.5 rounded hover:bg-white/10 transition-colors"
-              title="清空"
-            >
-              <X size={12} className="text-white/60" />
-            </button>
-          )}
-        </div>
-        <button
-          onClick={onChooseNotesDir}
-          className="p-1 rounded hover:bg-white/10 transition-colors shrink-0"
-          title="选择笔记目录"
-        >
-          <FolderCog size={14} className="text-white/60" />
-        </button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto custom-scrollbar px-2 py-2">
-        {filtered.length === 0 ? (
-          <div className="py-16 text-center text-xs text-gray-400">
-            未找到匹配的笔记
+    <div className="w-full h-full p-3">
+      <div className="panelRoot w-full h-full rounded-[22px] overflow-hidden">
+        <div className="panelHeader px-3.5 py-3 flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] tracking-[0.22em] uppercase text-white/60">
+              Float Notes
+            </div>
+            <div className="text-[14px] font-semibold text-white/92 leading-tight truncate">
+              即开即用 · 点击复制
+            </div>
           </div>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {filtered.slice(0, 120).map(({ category, note }) => (
+          <button
+            className="iconBtn"
+            onClick={onChooseNotesDir}
+            title="选择笔记目录"
+          >
+            <FolderCog size={16} />
+          </button>
+          <button
+            className="iconBtn"
+            onClick={onClose}
+            title="关闭"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="px-3.5 pb-3">
+          <div className="searchWrap flex items-center gap-2 px-3 py-2">
+            <Search size={16} className="text-white/45" />
+            <input
+              ref={searchRef}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              className="searchInput flex-1"
+              placeholder="搜索内容 / 分类…  Enter 复制第一条"
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') onClose();
+                if (e.key === 'Enter') {
+                  if (composerOpen) return;
+                  const first = filtered[0];
+                  if (first) copyAndClose(first);
+                }
+              }}
+            />
+            {q && (
               <button
-                key={`${category.id}/${note.id}`}
-                className="w-full text-left bg-white rounded-lg border border-[#D7CCC8]/50 hover:border-[#BCAAA4] hover:shadow-sm transition-all px-3 py-2 flex items-start gap-2"
-                onClick={() => handleCopy({ category, note })}
-                title="点击复制"
+                className="chipBtn"
+                onClick={() => { setQ(''); searchRef.current?.focus(); }}
+                title="清空"
               >
-                <div className="mt-0.5 w-6 h-6 rounded-full bg-gradient-to-br from-[#EFEBE9] to-[#D7CCC8] flex items-center justify-center shrink-0">
-                  <Copy size={12} className="text-[#795548]" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-[10px] text-[#8D6E63] shrink-0">{category.name}</span>
-                    <span className="text-[10px] text-gray-300 shrink-0">/</span>
-                    <span className="text-[11px] text-[#3E2723] truncate">
-                      {note.content.split('\n').find(l => l.trim())?.slice(0, 60) || '未命名'}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[10px] text-gray-400 whitespace-pre-wrap break-words max-h-[32px] overflow-hidden">
-                    {note.content.slice(0, 160)}
-                  </p>
-                </div>
+                清空
               </button>
-            ))}
+            )}
+            <button
+              className="primaryBtn flex items-center gap-1.5"
+              onClick={() => setComposerOpen(v => !v)}
+              title="新建笔记"
+            >
+              <Plus size={14} />
+              新建
+            </button>
+          </div>
+        </div>
+
+        {composerOpen && (
+          <div className="px-3.5 pb-3">
+            <div className="composerCard p-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-white/55 shrink-0">分类</span>
+                <select
+                  value={categoryName}
+                  onChange={(e) => setCategoryName(e.target.value)}
+                  className="selectField flex-1"
+                >
+                  <option value={defaultCategoryName}>{defaultCategoryName}</option>
+                  {categories
+                    .filter(c => c.name !== defaultCategoryName)
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map(c => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                </select>
+                <input
+                  value={categoryName}
+                  onChange={(e) => setCategoryName(e.target.value)}
+                  className="textField w-[132px]"
+                  placeholder="或输入新分类"
+                />
+              </div>
+              <div className="mt-2">
+                <textarea
+                  ref={composeRef}
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  className="textareaField w-full"
+                  rows={7}
+                  placeholder="输入 Markdown…  Ctrl+Enter 保存"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') { setComposerOpen(false); setContent(''); }
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault();
+                      saveNote();
+                    }
+                  }}
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <button
+                  className="chipBtn"
+                  onClick={() => { setComposerOpen(false); setContent(''); }}
+                >
+                  取消
+                </button>
+                <button
+                  className="saveBtn flex items-center gap-1.5"
+                  onClick={saveNote}
+                >
+                  <Check size={14} />
+                  保存
+                </button>
+              </div>
+            </div>
           </div>
         )}
+
+        <div className="px-3.5 pb-3">
+          <div className="listWrap">
+            {filtered.length === 0 ? (
+              <div className="emptyState">
+                <div className="emptyTitle">没有匹配结果</div>
+                <div className="emptyHint">点“新建”写一条，保存后点击即可复制</div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {filtered.slice(0, 120).map(r => (
+                  <button
+                    key={`${r.category.id}/${r.note.id}`}
+                    className="rowCard"
+                    onClick={() => copyAndClose(r)}
+                    title="点击复制并关闭"
+                  >
+                    <div className="rowLeft">
+                      <div className="rowDot" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="tag">{r.category.name}</span>
+                        <span className="rowTitle truncate">{firstLine(r.note.content)}</span>
+                      </div>
+                      <div className="rowBody">
+                        {r.note.content.slice(0, 140)}
+                      </div>
+                    </div>
+                    <div className="rowRight">
+                      <Copy size={14} className="text-white/45" />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
